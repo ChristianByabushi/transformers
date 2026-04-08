@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>3D → 2D Tensor Reshape Visualizer</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0f0f1a; color: #e0e0e0; font-family: 'Courier New', monospace; padding: 20px; }
+  h1 { text-align: center; color: #7eb8f7; margin-bottom: 6px; font-size: 1.3em; }
+  .subtitle { text-align: center; color: #888; font-size: 0.85em; margin-bottom: 24px; }
+  .tabs { display: flex; justify-content: center; gap: 10px; margin-bottom: 24px; }
+  .tab { padding: 8px 22px; border-radius: 20px; border: 2px solid #444; cursor: pointer;
+         background: #1a1a2e; color: #aaa; font-family: inherit; font-size: 0.9em; transition: all 0.2s; }
+  .tab.active { border-color: #7eb8f7; color: #7eb8f7; background: #1e2a3a; }
+  .scene { display: flex; flex-direction: column; align-items: center; gap: 18px; }
+  .step-row { display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap; justify-content: center; }
+  .step-block { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+  .step-title { font-size: 0.78em; color: #aaa; text-align: center; }
+  .step-shape { font-size: 0.68em; color: #f0a500; text-align: center; white-space: pre; }
+  .cell { width: 30px; height: 30px; border-radius: 4px; display: flex; align-items: center;
+          justify-content: center; font-size: 0.58em; cursor: pointer; transition: all 0.2s;
+          border: 1px solid rgba(255,255,255,0.08); font-weight: bold; }
+  .cell:hover { transform: scale(1.18); z-index: 10; }
+  .grid-wrap { display: flex; flex-direction: column; gap: 3px; }
+  .grid-row { display: flex; gap: 3px; }
+  .batch-sep { font-size: 0.6em; color: #666; margin-top: 4px; }
+  .arrow-block { display: flex; flex-direction: column; align-items: center; gap: 3px; padding-top: 30px; }
+  .arrow-sym { font-size: 1.8em; color: #7eb8f7; }
+  .arrow-lbl { font-size: 0.62em; color: #7eb8f7; text-align: center; white-space: pre; max-width: 100px; }
+  .info-box { background: #1a1a2e; border: 1px solid #333; border-radius: 10px;
+              padding: 12px 18px; max-width: 640px; width: 100%; font-size: 0.8em;
+              line-height: 1.8; color: #ccc; text-align: center; }
+  .info-box b { color: #7eb8f7; }
+  .info-box .hl { color: #f0a500; }
+  .focused-info { background: #1e2a1e; border: 1px solid #4caf50; border-radius: 8px;
+                  padding: 10px 16px; font-size: 0.78em; color: #a5d6a7; min-height: 38px;
+                  text-align: center; max-width: 640px; width: 100%; }
+  .btn { padding: 8px 22px; border-radius: 20px; border: none; cursor: pointer;
+         background: #7eb8f7; color: #0f0f1a; font-family: inherit; font-weight: bold;
+         font-size: 0.88em; transition: background 0.2s; }
+  .btn:hover { background: #aad4ff; }
+  .btn-row { display: flex; gap: 10px; justify-content: center; }
+  .dim-selector { display: flex; gap: 8px; align-items: center; justify-content: center; font-size: 0.82em; }
+  .dim-btn { padding: 5px 14px; border-radius: 14px; border: 2px solid #444; cursor: pointer;
+             background: #1a1a2e; color: #aaa; font-family: inherit; font-size: 0.85em; transition: all 0.2s; }
+  .dim-btn.active { border-color: #f0a500; color: #f0a500; }
+  .highlighted { box-shadow: 0 0 0 2px #fff, 0 0 10px 3px rgba(126,184,247,0.8) !important;
+                 transform: scale(1.22) !important; z-index: 20; }
+  .dimmed { opacity: 0.18; }
+  .softmax-row-highlight { outline: 2px dashed #f0a500; border-radius: 4px; }
+  .row-label { font-size: 0.58em; color: #888; width: 22px; text-align: right; padding-right: 3px; flex-shrink: 0; }
+  .col-header { display: flex; gap: 3px; padding-left: 25px; }
+  .col-lbl { width: 30px; font-size: 0.58em; color: #f0a500; text-align: center; }
+</style>
+</head>
+<body>
+<h1>Tensor Reshape Visualizer</h1>
+<p class="subtitle">Click any cell to trace it. For Softmax, change dim to see how moveaxis reorders the grid.</p>
+<div class="tabs">
+  <button class="tab active" onclick="switchTab('linear')">Linear (forward)</button>
+  <button class="tab" onclick="switchTab('softmax')">Softmax (forward)</button>
+  <button class="tab" onclick="switchTab('attention')">ScaledDotProduct (forward)</button>
+</div>
+<div class="scene" id="scene"></div>
+<script>
+const B=2, T=3, D=4, OUT=3;
+let currentTab='linear', focusedCell=null, softmaxDim=2;
+
+// Color: hue by b, lightness by t, saturation by d
+function cellColor(b,t,d,alpha=1){
+  const hues=[200,130,30,280];
+  const h=hues[b%hues.length];
+  const l=30+t*12;
+  const s=50+d*8;
+  return `hsla(${h},${s}%,${l}%,${alpha})`;
+}
+
+// Original coords -> flat index in (B,T,D) row-major
+function flatBTD(b,t,d){ return b*T*D + t*D + d; }
+
+// After moveaxis(dim, -1): new shape depends on dim
+// dim=0: (T,D,B) -> row-major flat: t*D*B + d*B + b
+// dim=1: (B,D,T) -> row-major flat: b*D*T + d*T + t
+// dim=2: (B,T,D) -> unchanged: b*T*D + t*D + d
+function movedShape(dim){ return dim===0?[T,D,B]: dim===1?[B,D,T]: [B,T,D]; }
+
+// Given original (b,t,d), what is its position in the moved tensor?
+// moved[i0,i1,i2] where the axes are reordered
+function movedCoords(b,t,d,dim){
+  if(dim===0) return [t,d,b];   // axis0(B)->last, so (T,D,B)
+  if(dim===1) return [b,d,t];   // axis1(T)->last, so (B,D,T)
+  return [b,t,d];               // axis2(D)->last, already last
+}
+
+// After moveaxis+reshape(-1, last_dim_size):
+// rows = product of all dims except last, cols = last dim size
+// row index = flat index of all-but-last dims
+function get2DPos(b,t,d,dim){
+  const [i0,i1,i2]=movedCoords(b,t,d,dim);
+  const sh=movedShape(dim);
+  const col=i2;
+  const row=i0*sh[1]+i1;
+  return {row,col};
+}
+
+function lastDimSize(dim){ return dim===0?B: dim===1?T: D; }
+function numRows(dim){ const sh=movedShape(dim); return sh[0]*sh[1]; }
+
+// Build all cells for original 3D tensor
+function allCells(){
+  const cells=[];
+  for(let b=0;b<B;b++) for(let t=0;t<T;t++) for(let d=0;d<D;d++)
+    cells.push({b,t,d});
+  return cells;
+}
+
+// ---- DOM helpers ----
+function el(tag,cls,text){
+  const e=document.createElement(tag);
+  if(cls) e.className=cls;
+  if(text!==undefined) e.textContent=text;
+  return e;
+}
+function arrowBlock(label){
+  const w=el('div','arrow-block');
+  w.appendChild(el('div','arrow-sym','→'));
+  const l=el('div','arrow-lbl',label);
+  w.appendChild(l);
+  return w;
+}
+function stepBlock(title,shape,grid){
+  const w=el('div','step-block');
+  w.appendChild(el('div','step-title',title));
+  w.appendChild(el('div','step-shape',shape));
+  w.appendChild(grid);
+  return w;
+}
+
+// ---- Grid builders ----
+
+// 3D input grid: grouped by b, rows=t, cols=d
+function make3DGrid(tag){
+  const wrap=el('div','grid-wrap');
+  for(let b=0;b<B;b++){
+    wrap.appendChild(el('div','batch-sep',`b=${b}`));
+    for(let t=0;t<T;t++){
+      const row=el('div','grid-row');
+      for(let d=0;d<D;d++){
+        const c=el('div','cell');
+        c.style.background=cellColor(b,t,d);
+        c.textContent=`${b}${t}${d}`;
+        c.dataset.b=b; c.dataset.t=t; c.dataset.d=d; c.dataset.tag=tag;
+        c.title=`Z[${b},${t},${d}]`;
+        c.onclick=()=>onCellClick(b,t,d);
+        row.appendChild(c);
+      }
+      wrap.appendChild(row);
+    }
+  }
+  return wrap;
+}
+
+// 3D moved grid: show reordered axes visually
+// dim=0 -> shape(T,D,B): group by t, rows=d, cols=b
+// dim=1 -> shape(B,D,T): group by b, rows=d, cols=t
+// dim=2 -> shape(B,T,D): same as original
+function makeMovedGrid(dim){
+  const wrap=el('div','grid-wrap');
+  const sh=movedShape(dim);
+  // iterate outer two dims as groups/rows, inner as cols
+  for(let i=0;i<sh[0];i++){
+    const groupLabel=dim===0?`t=${i}`:dim===1?`b=${i}`:`b=${i}`;
+    wrap.appendChild(el('div','batch-sep',groupLabel));
+    for(let j=0;j<sh[1];j++){
+      const row=el('div','grid-row');
+      for(let k=0;k<sh[2];k++){
+        // recover original b,t,d from moved coords [i,j,k]
+        let b,t,d;
+        if(dim===0){b=k;t=i;d=j;}
+        else if(dim===1){b=i;t=k;d=j;}
+        else{b=i;t=j;d=k;}
+        const c=el('div','cell');
+        c.style.background=cellColor(b,t,d);
+        c.textContent=`${b}${t}${d}`;
+        c.dataset.b=b; c.dataset.t=t; c.dataset.d=d; c.dataset.tag='moved';
+        c.title=`moved[${i},${j},${k}] ← Z[${b},${t},${d}]`;
+        c.onclick=()=>onCellClick(b,t,d);
+        row.appendChild(c);
+      }
+      wrap.appendChild(row);
+    }
+  }
+  return wrap;
+}
+
+// 2D flattened grid after reshape(-1, last_dim)
+function make2DFlatGrid(dim, tag){
+  const rows=numRows(dim), cols=lastDimSize(dim);
+  const wrap=el('div','grid-wrap');
+  // col headers
+  const hdr=el('div','col-header');
+  for(let c=0;c<cols;c++) hdr.appendChild(el('div','col-lbl',`c${c}`));
+  wrap.appendChild(hdr);
+
+  // build a lookup: for each (row,col) find original (b,t,d)
+  const grid=Array.from({length:rows},()=>Array(cols).fill(null));
+  for(let b=0;b<B;b++) for(let t=0;t<T;t++) for(let d=0;d<D;d++){
+    const {row,col}=get2DPos(b,t,d,dim);
+    grid[row][col]={b,t,d};
+  }
+
+  for(let r=0;r<rows;r++){
+    const rowEl=el('div','grid-row');
+    rowEl.appendChild(el('div','row-label',`r${r}`));
+    for(let c=0;c<cols;c++){
+      const entry=grid[r][c];
+      const cell=el('div','cell');
+      if(entry){
+        const {b,t,d}=entry;
+        cell.style.background=cellColor(b,t,d);
+        cell.textContent=`${b}${t}${d}`;
+        cell.dataset.b=b; cell.dataset.t=t; cell.dataset.d=d; cell.dataset.tag=tag;
+        cell.dataset.row2d=r; cell.dataset.col2d=c;
+        cell.title=`2d[${r},${c}] ← Z[${b},${t},${d}]`;
+        cell.onclick=()=>onCellClick(b,t,d);
+      }
+      rowEl.appendChild(cell);
+    }
+    wrap.appendChild(rowEl);
+  }
+  return wrap;
+}
+
+// Softmax output 2D: same layout as flat grid but green tones + σ label
+function makeSoftmaxOutGrid(dim){
+  const rows=numRows(dim), cols=lastDimSize(dim);
+  const wrap=el('div','grid-wrap');
+  const hdr=el('div','col-header');
+  for(let c=0;c<cols;c++) hdr.appendChild(el('div','col-lbl',`c${c}`));
+  wrap.appendChild(hdr);
+
+  const grid=Array.from({length:rows},()=>Array(cols).fill(null));
+  for(let b=0;b<B;b++) for(let t=0;t<T;t++) for(let d=0;d<D;d++){
+    const {row,col}=get2DPos(b,t,d,dim);
+    grid[row][col]={b,t,d};
+  }
+
+  for(let r=0;r<rows;r++){
+    const rowEl=el('div','grid-row');
+    rowEl.appendChild(el('div','row-label',`r${r}`));
+    for(let c=0;c<cols;c++){
+      const entry=grid[r][c];
+      const cell=el('div','cell');
+      if(entry){
+        const {b,t,d}=entry;
+        // green hue, vary by col position within row (same row = same softmax group)
+        const lightness=25+Math.round((c/cols)*30);
+        cell.style.background=`hsl(140,60%,${lightness}%)`;
+        cell.style.border='1px solid #4caf5066';
+        cell.textContent=`σ${b}${t}${d}`;
+        cell.style.fontSize='0.48em';
+        cell.dataset.b=b; cell.dataset.t=t; cell.dataset.d=d; cell.dataset.tag='softmax-out';
+        cell.dataset.row2d=r; cell.dataset.col2d=c;
+        cell.title=`softmax output for Z[${b},${t},${d}]\nshares row ${r} with ${cols} elements → sums to 1`;
+        cell.onclick=()=>onCellClick(b,t,d);
+      }
+      rowEl.appendChild(cell);
+    }
+    wrap.appendChild(rowEl);
+  }
+  return wrap;
+}
+
+// ---- RENDER ----
+function render(){
+  const scene=document.getElementById('scene');
+  scene.innerHTML='';
+  if(currentTab==='linear') renderLinear(scene);
+  else renderSoftmax(scene);
+}
+
+function renderLinear(scene){
+  const g1=make3DGrid('3d-in');
+  const g2=make2DFlatGrid(2,'2d-flat');  // dim=2 = last, same as linear reshape
+  const g3=make2DLinearOut();
+  const g4=make3DLinearOut();
+
+  const row=el('div','step-row');
+  row.appendChild(stepBlock('Input A',`(B=${B}, T=${T}, D=${D})`,g1));
+  row.appendChild(arrowBlock('reshape(-1,D)\nA.reshape(B·T,D)'));
+  row.appendChild(stepBlock('A_2d',`(B·T=${B*T}, D=${D})\nrow = b×T+t`,g2));
+  row.appendChild(arrowBlock('@ W.T + b\nmatmul'));
+  row.appendChild(stepBlock('Z_2d',`(B·T=${B*T}, OUT=${OUT})\nsame row grouping`,g3));
+  row.appendChild(arrowBlock(`reshape(B,T,OUT)\nrestore shape`));
+  row.appendChild(stepBlock('Output Z',`(B=${B}, T=${T}, OUT=${OUT})`,g4));
+  scene.appendChild(row);
+
+  const info=el('div','info-box');
+  info.innerHTML=`<b>Linear:</b> Z = A·Wᵀ + b &nbsp;|&nbsp; reshape flattens leading dims: <span class="hl">(B,T,D)→(B·T,D)</span><br>
+    Each 2D row = one token's features. Row index = <span class="hl">b×T + t</span>. Same row in output = same token.`;
+  scene.appendChild(info);
+  appendFocusUI(scene);
+  if(focusedCell) applyLinearFocus();
+}
+
+function make2DLinearOut(){
+  const rows=B*T, cols=OUT;
+  const wrap=el('div','grid-wrap');
+  const hdr=el('div','col-header');
+  for(let c=0;c<cols;c++) hdr.appendChild(el('div','col-lbl',`o${c}`));
+  wrap.appendChild(hdr);
+  for(let r=0;r<rows;r++){
+    const b=Math.floor(r/T), t=r%T;
+    const rowEl=el('div','grid-row');
+    rowEl.appendChild(el('div','row-label',`r${r}`));
+    for(let o=0;o<OUT;o++){
+      const c=el('div','cell');
+      c.style.background=cellColor(b,t,o,0.75);
+      c.textContent=`${b}${t}${o}`;
+      c.dataset.b=b; c.dataset.t=t; c.dataset.d=o; c.dataset.tag='2d-out';
+      c.title=`Z_2d[${r},${o}] — from token [b=${b},t=${t}]`;
+      c.onclick=()=>onCellClick(b,t,o);
+      rowEl.appendChild(c);
+    }
+    wrap.appendChild(rowEl);
+  }
+  return wrap;
+}
+
+function make3DLinearOut(){
+  const wrap=el('div','grid-wrap');
+  for(let b=0;b<B;b++){
+    wrap.appendChild(el('div','batch-sep',`b=${b}`));
+    for(let t=0;t<T;t++){
+      const row=el('div','grid-row');
+      for(let o=0;o<OUT;o++){
+        const c=el('div','cell');
+        c.style.background=cellColor(b,t,o,0.75);
+        c.textContent=`${b}${t}${o}`;
+        c.dataset.b=b; c.dataset.t=t; c.dataset.d=o; c.dataset.tag='3d-out';
+        c.title=`Z[${b},${t},${o}]`;
+        c.onclick=()=>onCellClick(b,t,o);
+        row.appendChild(c);
+      }
+      wrap.appendChild(row);
+    }
+  }
+  return wrap;
+}
+
+function renderSoftmax(scene){
+  // dim selector
+  const dimSel=el('div','dim-selector');
+  dimSel.appendChild(el('span','','softmax dim:'));
+  [0,1,2].forEach(d=>{
+    const btn=el('button','dim-btn',`dim=${d}`);
+    if(d===softmaxDim) btn.classList.add('active');
+    btn.onclick=()=>{ softmaxDim=d; focusedCell=null; render(); };
+    dimSel.appendChild(btn);
+  });
+  scene.appendChild(dimSel);
+
+  const sh=movedShape(softmaxDim);
+  const shStr=`(${sh.join(',')})`;
+  const rows=numRows(softmaxDim), cols=lastDimSize(softmaxDim);
+
+  const g1=make3DGrid('3d-in');
+  const g2=makeMovedGrid(softmaxDim);
+  const g3=make2DFlatGrid(softmaxDim,'2d-flat');
+  const g4=makeSoftmaxOutGrid(softmaxDim);
+  const g5=make3DGrid('3d-out');  // same shape, just show restored
+
+  const axisNames=['B','T','D'];
+  const movedAxes=softmaxDim===0?'(T,D,B)':softmaxDim===1?'(B,D,T)':'(B,T,D)';
+  const dimName=axisNames[softmaxDim];
+
+  const row=el('div','step-row');
+  row.appendChild(stepBlock('Input Z',`(B=${B}, T=${T}, D=${D})`,g1));
+  row.appendChild(arrowBlock(`moveaxis(${softmaxDim}→-1)\nbring ${dimName} to last`));
+  row.appendChild(stepBlock('Z_moved',`${movedAxes}\n${dimName} is now last col`,g2));
+  row.appendChild(arrowBlock(`reshape(-1,${cols})\nflatten leading dims`));
+  row.appendChild(stepBlock('Z_2d',`(${rows}, ${cols})\neach row = 1 softmax group`,g3));
+  row.appendChild(arrowBlock(`softmax per row\nexp(z)/Σexp(z)`));
+  row.appendChild(stepBlock('A_2d (σ)',`(${rows}, ${cols})\neach row sums to 1`,g4));
+  row.appendChild(arrowBlock(`reshape+moveaxis back\nrestore (B,T,D)`));
+  row.appendChild(stepBlock('Output A',`(B=${B}, T=${T}, D=${D})`,g5));
+  scene.appendChild(row);
+
+  const info=el('div','info-box');
+  info.innerHTML=`<b>Softmax dim=${softmaxDim} (${dimName} axis, size=${cols}):</b><br>
+    moveaxis brings dim ${softmaxDim} to last → shape becomes <span class="hl">${movedAxes}</span><br>
+    reshape → <span class="hl">(${rows}, ${cols})</span> — each row is one independent softmax computation<br>
+    <b>Change dim above</b> to see how the grid reorders and which cells share a row (= compete in softmax)`;
+  scene.appendChild(info);
+  appendFocusUI(scene);
+  if(focusedCell) applySoftmaxFocus();
+}
+
+function appendFocusUI(scene){
+  const focused=el('div','focused-info');
+  focused.id='focused-info';
+  focused.textContent='Click any cell to trace it through each step →';
+  scene.appendChild(focused);
+  const btnRow=el('div','btn-row');
+  const btn=el('button','btn','Reset Focus');
+  btn.onclick=()=>{ focusedCell=null; render(); };
+  btnRow.appendChild(btn);
+  scene.appendChild(btnRow);
+}
+
+// ---- FOCUS ----
+function onCellClick(b,t,d){ focusedCell={b,t,d}; render(); }
+
+function applyLinearFocus(){
+  const {b,t,d}=focusedCell;
+  const row2d=b*T+t;
+  document.querySelectorAll('.cell').forEach(cell=>{
+    const cb=+cell.dataset.b, ct=+cell.dataset.t, cd=+cell.dataset.d;
+    const tag=cell.dataset.tag;
+    let match=false;
+    if(tag==='3d-in'||tag==='3d-out') match=cb===b&&ct===t&&cd===d;
+    else if(tag==='2d-flat') match=cb===b&&ct===t&&cd===d;
+    else if(tag==='2d-out') match=cb===b&&ct===t;  // whole output row
+    cell.classList.toggle('highlighted',match);
+    cell.classList.toggle('dimmed',!match);
+  });
+  const info=document.getElementById('focused-info');
+  if(info) info.innerHTML=`Focused: <b>A[${b},${t},${d}]</b> &nbsp;|&nbsp;
+    flat idx = <b>${flatBTD(b,t,d)}</b> &nbsp;|&nbsp;
+    2D row = <b>${row2d}</b> (= ${b}×${T}+${t}), col = <b>${d}</b> &nbsp;|&nbsp;
+    output row <b>${row2d}</b> = all OUT features for this token`;
+}
+
+function applySoftmaxFocus(){
+  const {b,t,d}=focusedCell;
+  const {row,col}=get2DPos(b,t,d,softmaxDim);
+  document.querySelectorAll('.cell').forEach(cell=>{
+    const cb=+cell.dataset.b, ct=+cell.dataset.t, cd=+cell.dataset.d;
+    const tag=cell.dataset.tag;
+    const r2=+cell.dataset.row2d, c2=+cell.dataset.col2d;
+    let match=false;
+    if(tag==='3d-in'||tag==='3d-out') match=cb===b&&ct===t&&cd===d;
+    else if(tag==='moved') match=cb===b&&ct===t&&cd===d;
+    else if(tag==='2d-flat'||tag==='softmax-out'){
+      // highlight entire row (all cells that compete in same softmax)
+      match=(+cell.dataset.row2d===row);
+    }
+    cell.classList.toggle('highlighted',match);
+    cell.classList.toggle('dimmed',!match);
+  });
+  // find all cells in same softmax row
+  const rowmates=[];
+  for(let b2=0;b2<B;b2++) for(let t2=0;t2<T;t2++) for(let d2=0;d2<D;d2++){
+    const pos=get2DPos(b2,t2,d2,softmaxDim);
+    if(pos.row===row) rowmates.push(`[${b2},${t2},${d2}]`);
+  }
+  const info=document.getElementById('focused-info');
+  if(info) info.innerHTML=`Focused: <b>Z[${b},${t},${d}]</b> &nbsp;|&nbsp;
+    2D pos = row <b>${row}</b>, col <b>${col}</b> &nbsp;|&nbsp;
+    <span style="color:#f0a500">Softmax group (row ${row}):</span> ${rowmates.join(' ')} → these ${rowmates.length} values compete → sum to 1`;
+}
+
+// ===================== ATTENTION =====================
+// Dims: N=2 batches, H=2 heads, L=3 queries, S=4 keys, E=3 embed
+const AN=2, AH=2, AL=3, AS=4, AE=3, AEV=3;
+let attnFocus=null; // {type,n,h,i,j} type=Q|K|V|score|alpha|out
+
+function attnColor(n,h,i,alpha=1){
+  const hues=[200,130,30,280];
+  const h2=hues[(n*AH+h)%hues.length];
+  const l=28+i*12;
+  return `hsla(${h2},65%,${l}%,${alpha})`;
+}
+
+function makeAttnGrid(label, N, H, rows, cols, tag, colorFn, textFn, titleFn, clickFn){
+  const wrap=el('div','grid-wrap');
+  for(let n=0;n<N;n++){
+    wrap.appendChild(el('div','batch-sep',`n=${n}`));
+    for(let h=0;h<H;h++){
+      const hLbl=el('div','batch-sep'); hLbl.style.color='#7eb8f7'; hLbl.style.marginLeft='8px';
+      hLbl.textContent=`h=${h}`; wrap.appendChild(hLbl);
+      for(let i=0;i<rows;i++){
+        const row=el('div','grid-row');
+        row.appendChild(el('div','row-label',`${i}`));
+        for(let j=0;j<cols;j++){
+          const c=el('div','cell');
+          c.style.background=colorFn(n,h,i,j);
+          c.textContent=textFn(n,h,i,j);
+          c.style.fontSize='0.5em';
+          c.dataset.tag=tag; c.dataset.n=n; c.dataset.h=h; c.dataset.i=i; c.dataset.j=j;
+          c.title=titleFn(n,h,i,j);
+          c.onclick=()=>clickFn(n,h,i,j);
+          row.appendChild(c);
+        }
+        wrap.appendChild(row);
+      }
+    }
+  }
+  return wrap;
+}
+
+function renderAttention(scene){
+  // Q: (N,H,L,E)  K: (N,H,S,E)  V: (N,H,S,Ev)
+  // scores = Q@K^T / sqrt(E): (N,H,L,S)
+  // alpha  = softmax(scores, dim=-1): (N,H,L,S)
+  // out    = alpha @ V: (N,H,L,Ev)
+
+  const gQ = makeAttnGrid('Q'  ,AN,AH,AL,AE,'Q',
+    (n,h,i,j)=>attnColor(n,h,i),
+    (n,h,i,j)=>`q${i}${j}`,
+    (n,h,i,j)=>`Q[${n},${h},${i},${j}]  query pos ${i}, embed ${j}`,
+    (n,h,i,j)=>onAttnClick('Q',n,h,i,j));
+
+  const gK = makeAttnGrid('K'  ,AN,AH,AS,AE,'K',
+    (n,h,i,j)=>attnColor(n,h,i,0.75),
+    (n,h,i,j)=>`k${i}${j}`,
+    (n,h,i,j)=>`K[${n},${h},${i},${j}]  key pos ${i}, embed ${j}`,
+    (n,h,i,j)=>onAttnClick('K',n,h,i,j));
+
+  const gV = makeAttnGrid('V'  ,AN,AH,AS,AEV,'V',
+    (n,h,i,j)=>`hsl(280,50%,${28+i*10}%)`,
+    (n,h,i,j)=>`v${i}${j}`,
+    (n,h,i,j)=>`V[${n},${h},${i},${j}]  value pos ${i}, dim ${j}`,
+    (n,h,i,j)=>onAttnClick('V',n,h,i,j));
+
+  // scores: (N,H,L,S) — Q[l,:] dot K[s,:]
+  const gS = makeAttnGrid('scores',AN,AH,AL,AS,'score',
+    (n,h,i,j)=>`hsl(45,70%,${22+i*8}%)`,
+    (n,h,i,j)=>`s${i}${j}`,
+    (n,h,i,j)=>`score[${n},${h},${i},${j}] = Q[${n},${h},${i},:] · K[${n},${h},${j},:] / √${AE}\nquery ${i} vs key ${j}`,
+    (n,h,i,j)=>onAttnClick('score',n,h,i,j));
+
+  // alpha: (N,H,L,S) — softmax over S (last dim)
+  const gA = makeAttnGrid('α (attn)',AN,AH,AL,AS,'alpha',
+    (n,h,i,j)=>`hsl(140,60%,${20+j*8}%)`,
+    (n,h,i,j)=>`α${i}${j}`,
+    (n,h,i,j)=>`α[${n},${h},${i},${j}] = softmax(scores[${n},${h},${i},:])[${j}]\nrow ${i} sums to 1 across all ${AS} keys`,
+    (n,h,i,j)=>onAttnClick('alpha',n,h,i,j));
+
+  // out: (N,H,L,Ev) — alpha @ V
+  const gO = makeAttnGrid('output',AN,AH,AL,AEV,'out',
+    (n,h,i,j)=>attnColor(n,h,i,0.8),
+    (n,h,i,j)=>`o${i}${j}`,
+    (n,h,i,j)=>`out[${n},${h},${i},${j}] = Σ_s α[${n},${h},${i},s]·V[${n},${h},s,${j}]\nweighted sum of all values for query ${i}`,
+    (n,h,i,j)=>onAttnClick('out',n,h,i,j));
+
+  // layout: Q,K,V on top row; scores->alpha->out on bottom
+  const topRow=el('div','step-row');
+  topRow.appendChild(stepBlock('Q',`(N=${AN},H=${AH},L=${AL},E=${AE})\nquery matrix`,gQ));
+  topRow.appendChild(arrowBlock(`Q @ Kᵀ / √E\nswapaxes(-2,-1)`));
+  topRow.appendChild(stepBlock('K',`(N=${AN},H=${AH},S=${AS},E=${AE})\nkey matrix`,gK));
+  topRow.appendChild(arrowBlock(''));
+  topRow.appendChild(stepBlock('V',`(N=${AN},H=${AH},S=${AS},Ev=${AEV})\nvalue matrix`,gV));
+  scene.appendChild(topRow);
+
+  const botRow=el('div','step-row');
+  botRow.appendChild(stepBlock('scores',`(N,H,L=${AL},S=${AS})\nQ·Kᵀ/√E\neach cell = 1 query-key pair`,gS));
+  botRow.appendChild(arrowBlock(`softmax(dim=-1)\nover S keys per query`));
+  botRow.appendChild(stepBlock('α weights',`(N,H,L=${AL},S=${AS})\neach row sums to 1\n(1 row = 1 query)`,gA));
+  botRow.appendChild(arrowBlock(`α @ V\nweighted sum`));
+  botRow.appendChild(stepBlock('output',`(N,H,L=${AL},Ev=${AEV})\n1 row = context vector\nfor that query`,gO));
+  scene.appendChild(botRow);
+
+  const info=el('div','info-box');
+  info.innerHTML=`<b>Attention(Q,K,V) = softmax(Q·Kᵀ/√E)·V</b><br>
+    Click <span class="hl">Q row</span> → see which score row it produces &nbsp;|&nbsp;
+    Click <span class="hl">K row</span> → see which score column it produces &nbsp;|&nbsp;
+    Click <span class="hl">score/α cell</span> → see the Q row + K row that produced it &nbsp;|&nbsp;
+    Click <span class="hl">V row</span> → see which output columns it contributes to`;
+  scene.appendChild(info);
+  appendFocusUI(scene);
+  if(attnFocus) applyAttnFocus();
+}
+
+function onAttnClick(type,n,h,i,j){
+  attnFocus={type,n,h,i,j}; render();
+}
+
+function applyAttnFocus(){
+  const {type,n,h,i,j}=attnFocus;
+  document.querySelectorAll('.cell').forEach(cell=>{
+    const cn=+cell.dataset.n, ch=+cell.dataset.h;
+    const ci=+cell.dataset.i, cj=+cell.dataset.j;
+    const tag=cell.dataset.tag;
+    let match=false;
+
+    if(cn!==n||ch!==h){ cell.classList.toggle('highlighted',false); cell.classList.toggle('dimmed',true); return; }
+
+    if(type==='Q'){
+      // Q row i -> score row i -> alpha row i -> output row i
+      if(tag==='Q')     match=ci===i;
+      if(tag==='score') match=ci===i;   // whole row of scores
+      if(tag==='alpha') match=ci===i;   // whole row of alphas
+      if(tag==='out')   match=ci===i;   // output row
+      if(tag==='K')     match=false;    // all keys contribute
+      if(tag==='V')     match=false;
+    } else if(type==='K'){
+      // K row j -> score col j -> alpha col j
+      if(tag==='K')     match=ci===i;
+      if(tag==='score') match=cj===i;   // column i in scores
+      if(tag==='alpha') match=cj===i;
+      if(tag==='Q')     match=false;
+      if(tag==='V')     match=ci===i;   // same position in V
+      if(tag==='out')   match=false;
+    } else if(type==='score'||type==='alpha'){
+      // score[l,s] -> Q row l, K row s, alpha[l,s], out row l
+      const l=i, s=j;
+      if(tag==='Q')     match=ci===l;
+      if(tag==='K')     match=ci===s;
+      if(tag==='score') match=ci===l&&cj===s;
+      if(tag==='alpha') match=ci===l&&cj===s;
+      if(tag==='V')     match=ci===s;   // the key position s in V
+      if(tag==='out')   match=ci===l;
+    } else if(type==='V'){
+      // V row i contributes to all output rows via alpha[:,i]
+      if(tag==='V')     match=ci===i;
+      if(tag==='alpha') match=cj===i;   // alpha col i weights this V row
+      if(tag==='score') match=cj===i;
+      if(tag==='K')     match=ci===i;
+      if(tag==='Q')     match=false;
+      if(tag==='out')   match=false;    // contributes to all, don't highlight all
+    } else if(type==='out'){
+      if(tag==='out')   match=ci===i;
+      if(tag==='alpha') match=ci===i;
+      if(tag==='score') match=ci===i;
+      if(tag==='Q')     match=ci===i;
+      if(tag==='K')     match=false;
+      if(tag==='V')     match=false;
+    }
+    cell.classList.toggle('highlighted',match);
+    cell.classList.toggle('dimmed',!match);
+  });
+
+  const info=document.getElementById('focused-info');
+  if(!info) return;
+  const msgs={
+    Q:`Q[${n},${h},${i},:]  (query pos ${i}) → produces score row ${i} → alpha row ${i} → output row ${i}`,
+    K:`K[${n},${h},${i},:]  (key pos ${i}) → produces score col ${i} → alpha col ${i} (weights V row ${i})`,
+    score:`score[${n},${h},${i},${j}] = Q[${n},${h},${i},:] · K[${n},${h},${j},:] / √${AE}  (query ${i} attends to key ${j})`,
+    alpha:`α[${n},${h},${i},${j}] = softmax of score row ${i} at position ${j}  →  weights V[${n},${h},${j},:]`,
+    V:`V[${n},${h},${i},:]  (value pos ${i}) → weighted by α[:,${i}] → contributes to all output rows`,
+    out:`out[${n},${h},${i},:]  = Σ_s α[${n},${h},${i},s] · V[${n},${h},s,:]  (context for query ${i})`
+  };
+  info.innerHTML=`<b>${msgs[type]||''}</b>`;
+}
+
+// ---- TAB ----
+function switchTab(tab){
+  currentTab=tab; focusedCell=null; attnFocus=null;
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t=>{ if(t.textContent.toLowerCase().includes(tab)) t.classList.add('active'); });
+  render();
+}
+
+function render(){
+  const scene=document.getElementById('scene');
+  scene.innerHTML='';
+  if(currentTab==='linear') renderLinear(scene);
+  else if(currentTab==='softmax') renderSoftmax(scene);
+  else renderAttention(scene);
+}
+render();
+</script>
+</body>
+</html>
