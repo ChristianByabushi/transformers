@@ -61,7 +61,7 @@ class MultiHeadAttention:
         # Q' = Wq.query or K' = Wk.key   V' = Wv.value
         q = self.q_proj.forward(query)
         k = self.k_proj.forward(key)
-        v = self.v_proj(value)
+        v = self.v_proj.forward(value)
 
         # Reshape for multiple heads
         # split heads: (N,L,E) -> (N,H,L,E/H) 
@@ -112,8 +112,8 @@ class MultiHeadAttention:
 
         # Backpropagate through input projections
         d_q = self.q_proj.backward(d_q)
-        d_k = self.q_proj.backward(d_k)
-        d_v = self.q_proj(d_v)
+        d_k = self.k_proj.backward(d_k)
+        d_v = self.v_proj.backward(d_v)
 
         return d_q, d_k, d_v
 
@@ -141,7 +141,7 @@ class MultiHeadAttention:
     def _split_heads(self, x):
         """
         Reshape tensor for multi-head attention.
-        
+
         """
         N,L,E = x.shape
 

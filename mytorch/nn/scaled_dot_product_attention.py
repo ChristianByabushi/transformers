@@ -37,7 +37,7 @@ class ScaledDotProductAttention:
         # Apply mask before softmax if provided
         if mask is not None:
             scaled_dot_product = np.where(mask, scaled_dot_product - self.eps, scaled_dot_product)
-        
+
 
         # Compute attention scores: 
         # # Think about which dimension you should apply Softmax
@@ -58,16 +58,17 @@ class ScaledDotProductAttention:
         dk = self.Q.shape[-1]
 
         # dL/dV = A^T @ d_output --> (N,....,H,S,Ev)
-        d_V = self.attention_scores.swapaxes(-2,-1) @ d_ouput
+        d_V = self.attention_scores.swapaxes(-2,-1) @ d_output
         
 
         # dL/dA = d_output @ V^T ->  (N,...,H,L,S)
-        d_attention_scores = d_output @ self.V.swapaxes(2,-1)
+        d_attention_scores = d_output @ self.V.swapaxes(-2,-1)
 
 
         # dL/dS = softmax backward 
         d_scaled_dot_product = self.softmax.backward(d_attention_scores)
 
+        d_scaled_dot_product = d_scaled_dot_product/np.sqrt(dk)
         # dL/dQ = dL/dS @ K 
         d_Q = d_scaled_dot_product @ self.K 
 

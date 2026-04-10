@@ -45,17 +45,17 @@ class Softmax:
         :param dLdA: Gradient of loss wrt output
         :return: Gradient of loss with respect to activation input
         """
-        
+
         dLdA_moved = np.moveaxis(dLdA, self.dim, -1) 
         A_moved = np.moveaxis(self.A, self.dim, -1) 
         original_shape = A_moved.shape
 
         dLdA_2d = dLdA_moved.reshape(-1, dLdA_moved.shape[-1]) 
-        A2_d = A_moved.reshape(-1, A_moved.shape[-1]) 
+        A_2d = A_moved.reshape(-1, A_moved.shape[-1]) 
 
         dLdZ = A_2d * (dLdA_2d - np.sum(dLdA_2d * A_2d, axis=1, keepdims=True))
 
-        dLdZ = np.moveaxis(dLdZ_2d.reshape(orignial_shape),-1, self.dim)
+        dLdZ = np.moveaxis(dLdZ.reshape(original_shape),-1, self.dim)
 
         return dLdZ
 

@@ -51,6 +51,16 @@
   .row-label { font-size: 0.58em; color: #888; width: 22px; text-align: right; padding-right: 3px; flex-shrink: 0; }
   .col-header { display: flex; gap: 3px; padding-left: 25px; }
   .col-lbl { width: 30px; font-size: 0.58em; color: #f0a500; text-align: center; }
+  .tf-pipeline { display: flex; flex-direction: column; align-items: center; gap: 0; width: 100%; max-width: 480px; }
+  .tf-box { width: 100%; border: 2px solid #444; border-radius: 8px; padding: 10px 16px;
+            cursor: pointer; transition: all 0.25s; background: #1a1a2e; }
+  .tf-box:hover { filter: brightness(1.3); }
+  .tf-active { transform: scale(1.03); box-shadow: 0 0 18px 4px rgba(126,184,247,0.3); }
+  .tf-box-label { font-size: 0.82em; font-weight: bold; color: #ccc; }
+  .tf-box-desc { font-size: 0.72em; color: #a5d6a7; margin-top: 6px; white-space: pre; line-height: 1.6; }
+  .tf-arrow { font-size: 1.2em; color: #555; line-height: 1.2; }
+  .tf-progress { width: 100%; max-width: 480px; height: 6px; background: #333; border-radius: 3px; overflow: hidden; }
+  .tf-progress-fill { height: 100%; background: #7eb8f7; border-radius: 3px; transition: width 0.3s; }
 </style>
 </head>
 <body>
@@ -60,6 +70,7 @@
   <button class="tab active" onclick="switchTab('linear')">Linear (forward)</button>
   <button class="tab" onclick="switchTab('softmax')">Softmax (forward)</button>
   <button class="tab" onclick="switchTab('attention')">ScaledDotProduct (forward)</button>
+  <button class="tab" onclick="switchTab('transformer')">Transformer Flow</button>
 </div>
 <div class="scene" id="scene"></div>
 <script>
@@ -644,9 +655,150 @@ function applyAttnFocus(){
   info.innerHTML=`<b>${msgs[type]||''}</b>`;
 }
 
-// ---- TAB ----
+// ===================== TRANSFORMER FLOW =====================
+const TF_MODES = ['encoder', 'decoder-only', 'encoder-decoder'];
+let tfMode = 'decoder-only';
+let tfStep = -1; // -1 = idle
+let tfTimer = null;
+
+// Steps for each mode
+const STEPS = {
+  'decoder-only': [
+    { id:'embed',   label:'Token Embedding',      desc:'Input tokens → dense vectors via nn.Embedding\nshape: (B, T) → (B, T, d_model)',          color:'#3a6186' },
+    { id:'pe',      label:'+ Positional Encoding', desc:'Add position info: x = embed(x) + PE[:T]\nshape stays (B, T, d_model)',                  color:'#1a6b3a' },
+    { id:'drop',    label:'Dropout',               desc:'Regularization on embeddings\nshape stays (B, T, d_model)',                               color:'#555' },
+    { id:'norm1',   label:'LayerNorm (pre)',        desc:'Normalize before self-attention\nPre-LN: norm applied BEFORE the operation',             color:'#6b3a1a' },
+    { id:'mask',    label:'CausalMask + PadMask',  desc:'CausalMask (T,T): block future tokens\nPadMask (B,T): block padding tokens',             color:'#7b1a1a' },
+    { id:'mha',     label:'Masked Multi-Head Attn',desc:'Self-attention with causal+pad masks\nQ=K=V=x → output (B, T, d_model)',                 color:'#89216b' },
+    { id:'res1',    label:'Residual + Dropout',    desc:'x = x_residual + dropout(attn_out)\nshape stays (B, T, d_model)',                        color:'#555' },
+    { id:'norm2',   label:'LayerNorm (pre)',        desc:'Normalize before feed-forward\nPre-LN applied again',                                    color:'#6b3a1a' },
+    { id:'ffn',     label:'FeedForward Network',   desc:'Linear(d_model→d_ff) → GELU → Dropout → Linear(d_ff→d_model)\nshape stays (B, T, d_model)', color:'#1a4a6b' },
+    { id:'res2',    label:'Residual + Dropout',    desc:'x = x_residual + dropout(ffn_out)\nshape stays (B, T, d_model)',                         color:'#555' },
+    { id:'repeat',  label:'× N Layers',            desc:'Repeat the decoder layer N times\nEach layer refines the representation',                color:'#444' },
+    { id:'normlast',label:'Final LayerNorm',       desc:'Normalize after all layers\nshape stays (B, T, d_model)',                                color:'#6b3a1a' },
+    { id:'proj',    label:'Linear Projection',     desc:'Project to vocab size\n(B, T, d_model) → (B, T, vocab_size)',                            color:'#3a1a6b' },
+    { id:'loss',    label:'CrossEntropyLoss',       desc:'Compare logits vs target tokens\nLoss = -log P(correct token)',                          color:'#7b1a1a' },
+  ],
+  'encoder': [
+    { id:'embed',   label:'Token Embedding',       desc:'Input tokens → dense vectors\nshape: (B, T) → (B, T, d_model)',                          color:'#3a6186' },
+    { id:'pe',      label:'+ Positional Encoding', desc:'Add position info\nshape stays (B, T, d_model)',                                         color:'#1a6b3a' },
+    { id:'norm1',   label:'LayerNorm (pre)',        desc:'Pre-LN before self-attention',                                                           color:'#6b3a1a' },
+    { id:'mask',    label:'PadMask only',           desc:'PadMask (B,T): block padding\nNO causal mask — encoder sees all positions',             color:'#7b1a1a' },
+    { id:'mha',     label:'Multi-Head Self-Attn',  desc:'Bidirectional self-attention\nQ=K=V=x, no causal constraint',                           color:'#89216b' },
+    { id:'res1',    label:'Residual + Dropout',    desc:'x = x_residual + dropout(attn_out)',                                                     color:'#555' },
+    { id:'norm2',   label:'LayerNorm (pre)',        desc:'Pre-LN before feed-forward',                                                            color:'#6b3a1a' },
+    { id:'ffn',     label:'FeedForward Network',   desc:'Linear → GELU → Dropout → Linear\nshape stays (B, T, d_model)',                         color:'#1a4a6b' },
+    { id:'res2',    label:'Residual + Dropout',    desc:'x = x_residual + dropout(ffn_out)',                                                      color:'#555' },
+    { id:'repeat',  label:'× N Layers',            desc:'Repeat encoder layer N times',                                                           color:'#444' },
+    { id:'out',     label:'Encoder Output',        desc:'Rich contextual representations\nshape: (B, T, d_model) → passed to decoder',           color:'#1a6b3a' },
+  ],
+  'encoder-decoder': [
+    { id:'enc_embed', label:'Encoder Embedding',    desc:'Source tokens → embeddings + PE\nshape: (B, S, d_model)',                               color:'#1a6b3a' },
+    { id:'enc_layers',label:'Encoder Layers × N',  desc:'Bidirectional self-attention\nBuilds rich source representations',                       color:'#1a4a6b' },
+    { id:'enc_out',   label:'Encoder Output',       desc:'shape: (B, S, d_model)\nPassed as K,V to cross-attention',                             color:'#1a6b3a' },
+    { id:'dec_embed', label:'Decoder Embedding',    desc:'Target tokens → embeddings + PE\nshape: (B, T, d_model)',                               color:'#3a6186' },
+    { id:'dec_self',  label:'Masked Self-Attn',     desc:'Causal self-attention on target\nQ=K=V=decoder input',                                  color:'#89216b' },
+    { id:'cross',     label:'Cross-Attention',      desc:'Q=decoder, K=V=encoder output\nDecoder attends to source sequence',                    color:'#f0a500' },
+    { id:'dec_ffn',   label:'FeedForward',          desc:'Position-wise FFN\nshape stays (B, T, d_model)',                                        color:'#1a4a6b' },
+    { id:'repeat',    label:'× N Decoder Layers',  desc:'Repeat decoder layer N times',                                                           color:'#444' },
+    { id:'proj',      label:'Linear + Softmax',     desc:'(B, T, d_model) → (B, T, vocab_size)\nPredict next target token',                      color:'#3a1a6b' },
+  ]
+};
+
+function renderTransformer(scene) {
+  // mode selector
+  const modeSel = el('div','dim-selector');
+  modeSel.appendChild(el('span','','Architecture:'));
+  TF_MODES.forEach(m => {
+    const btn = el('button','dim-btn', m);
+    if(m === tfMode) btn.classList.add('active');
+    btn.onclick = () => { tfMode=m; tfStep=-1; clearInterval(tfTimer); render(); };
+    modeSel.appendChild(btn);
+  });
+  scene.appendChild(modeSel);
+
+  const steps = STEPS[tfMode];
+
+  // pipeline container
+  const pipeline = el('div','tf-pipeline');
+  steps.forEach((step, idx) => {
+    const box = el('div','tf-box');
+    box.id = 'tfbox-'+idx;
+    box.style.borderColor = step.color;
+    if(idx === tfStep) { box.classList.add('tf-active'); box.style.background = step.color+'44'; }
+
+    const lbl = el('div','tf-box-label', step.label);
+    lbl.style.color = idx===tfStep ? '#fff' : '#ccc';
+    box.appendChild(lbl);
+
+    if(idx === tfStep) {
+      const desc = el('div','tf-box-desc', step.desc);
+      box.appendChild(desc);
+    }
+
+    box.onclick = () => { clearInterval(tfTimer); tfStep=idx; render(); };
+    pipeline.appendChild(box);
+
+    if(idx < steps.length-1) {
+      const arr = el('div','tf-arrow','↓');
+      pipeline.appendChild(arr);
+    }
+  });
+  scene.appendChild(pipeline);
+
+  // controls
+  const ctrl = el('div','btn-row');
+
+  const playBtn = el('button','btn', tfTimer ? '⏸ Pause' : '▶ Play');
+  playBtn.onclick = () => {
+    if(tfTimer){ clearInterval(tfTimer); tfTimer=null; render(); return; }
+    if(tfStep >= steps.length-1) tfStep = -1;
+    tfTimer = setInterval(() => {
+      tfStep++;
+      if(tfStep >= steps.length){ clearInterval(tfTimer); tfTimer=null; }
+      render();
+    }, 1200);
+    render();
+  };
+
+  const prevBtn = el('button','btn','← Prev');
+  prevBtn.onclick = () => { clearInterval(tfTimer); tfTimer=null; tfStep=Math.max(-1,tfStep-1); render(); };
+
+  const nextBtn = el('button','btn','Next →');
+  nextBtn.onclick = () => { clearInterval(tfTimer); tfTimer=null; tfStep=Math.min(steps.length-1,tfStep+1); render(); };
+
+  const resetBtn = el('button','btn','Reset');
+  resetBtn.onclick = () => { clearInterval(tfTimer); tfTimer=null; tfStep=-1; render(); };
+
+  ctrl.appendChild(prevBtn);
+  ctrl.appendChild(playBtn);
+  ctrl.appendChild(nextBtn);
+  ctrl.appendChild(resetBtn);
+  scene.appendChild(ctrl);
+
+  // progress bar
+  const prog = el('div','tf-progress');
+  const fill = el('div','tf-progress-fill');
+  fill.style.width = tfStep < 0 ? '0%' : ((tfStep+1)/steps.length*100)+'%';
+  prog.appendChild(fill);
+  scene.appendChild(prog);
+
+  // step info box
+  const info = el('div','info-box');
+  if(tfStep >= 0 && tfStep < steps.length){
+    const s = steps[tfStep];
+    info.innerHTML = `<b style="color:${s.color}">[${tfStep+1}/${steps.length}] ${s.label}</b><br><span style="white-space:pre">${s.desc}</span>`;
+  } else {
+    info.innerHTML = `<b>Click a step or press ▶ Play</b> to animate the forward pass<br>
+      Switch architecture above to compare Encoder / Decoder-Only / Encoder-Decoder`;
+  }
+  scene.appendChild(info);
+}
+
+
 function switchTab(tab){
   currentTab=tab; focusedCell=null; attnFocus=null;
+  if(tab!=='transformer'){ clearInterval(tfTimer); tfTimer=null; tfStep=-1; }
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
   document.querySelectorAll('.tab').forEach(t=>{ if(t.textContent.toLowerCase().includes(tab)) t.classList.add('active'); });
   render();
@@ -657,7 +809,8 @@ function render(){
   scene.innerHTML='';
   if(currentTab==='linear') renderLinear(scene);
   else if(currentTab==='softmax') renderSoftmax(scene);
-  else renderAttention(scene);
+  else if(currentTab==='attention') renderAttention(scene);
+  else renderTransformer(scene);
 }
 render();
 </script>

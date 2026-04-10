@@ -49,7 +49,7 @@ class Linear:
         
         
         # Standard affine: Z = A @ W^T + b
-        Z_2_d = A_2d @ self.W.T + self.b 
+        Z_2d = A_2d @ self.W.T + self.b 
 
         # restore original leading dims, replace last dim with out_features
         # e.g *(3,2) >> (3,2)
@@ -66,7 +66,7 @@ class Linear:
         """
 
         
-        dLdZ_2d = dLdz.reshape(-1, dLdZ.shape[-1])  
+        dLdZ_2d = dLdZ.reshape(-1, dLdZ.shape[-1])  
 
         A_2d = self.A 
 
@@ -78,6 +78,6 @@ class Linear:
         self.dLA_2d = dLdZ_2d @ self.W
         # self.dLdA = dLdZ @ self.W
         
-        self.dLdA = dLdZ_2d.reshape(self.input_shape) 
+        self.dLdA = self.dLA_2d.reshape(self.input_shape) 
 
         return self.dLdA

@@ -22,11 +22,25 @@ class PositionalEncoding(nn.Module):
             d_model (int): The dimension of the model.
             max_len (int): The maximum length of the input sequence.
         """
-        # TODO: Implement create_pe_table
-        raise NotImplementedError # Remove once implemented
-        pe = NotImplementedError
-        # Register as buffer to save with model state
-        self.register_buffer('pe', pe)
+
+        pe = torch.zeros(max_len, d_model)
+
+        # positions: (max_len,1)
+        positions = torch.arange(0, max_len).unsqueeze(1).float() 
+
+        # div_term: (d_model/2, ) - the 10 0000 ^ (2id) denominator
+        i = torch.arange(0, d_model, 2).float()
+
+        div_term = torch.exp(i*(-math.log(10000.0)/d_model)) 
+
+
+        # Even positions get sine, odd positions get cosine
+        pe[:, 0::2] = torch.sin(positions * div_term)
+        pe[:, 1::2] = torch.cos(positions * div_term)
+
+        self.register_buffer('pe', pe.unsqueeze(0))
+
+
         
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -41,9 +55,10 @@ class PositionalEncoding(nn.Module):
         """
         # TODO: Implement forward
         # Step 1: Get sequence length from input tensor
-        seq_len = NotImplementedError
+        seq_len = x.shape[1]
         # Step 2: Verify sequence length doesn't exceed maximum length, raise error if it does
         if seq_len > self.pe.size(1):
             raise ValueError(f"Sequence length {seq_len} exceeds the maximum length {self.pe.size(1)}")
         # Step 3: Add positional encodings to input
-        raise NotImplementedError # Remove once implemented
+        return x + self.pe[:, :seq_len,:]
+        # ach token embedding gets its position's encoding added to it
