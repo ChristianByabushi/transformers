@@ -1,27 +1,4 @@
-# 📘 HW4 Handout
-
-This assignment introduces a new format designed to improve your development workflow. The main goals are:
-
-- **Test Suite Integration**: Your code will be tested similarly to HW1.
-- **Local Development**: You can perform most development locally, reducing compute usage.
-- **Hands-on Experience**: Build a full deep learning pipeline with fewer abstractions than before.
-
----
-
-## ⚠️ Important: Working Directory
-
-For the provided notebooks to work, your **current working directory must match the handout directory**.
-
-This is required because all imports use **relative paths**.
-
-### You can fix this by:
-1. Moving your notebook into the handout directory  
-2. OR changing the working directory in Python:
-```python
-import os
-os.chdir("path/to/handout")
-
-
+# TRANSFORMERS
 .
 ├── README.md
 ├── hw4lib/
