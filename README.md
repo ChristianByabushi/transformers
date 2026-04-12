@@ -322,9 +322,9 @@ If everything was done correctly, You should see atleast the following files in 
 ### PSC
 ### 1️⃣ **Step 1 Setting Up Your Environment on Bridges2**
 
-❗️⚠️ For this homework, we are **providing a shared Conda environment** for the entire class. Therefore, PSC users **do not need to manually install any packages**.
+❗️For this homework, we are **providing a shared Conda environment** for the entire class. Therefore, PSC users **do not need to manually install any packages**.
 
-❗️⚠️ For this homework, you need to **download the dataset to the node `$LOCAL`** to avoid I/O bottlenecks from the shared filesystem. This means that each time you run on a new node, you need to download the dataset again. However, as long as you stay on the same node, you do not need to re-download the dataset. 
+❗️For this homework, you need to **download the dataset to the node `$LOCAL`** to avoid I/O bottlenecks from the shared filesystem. This means that each time you run on a new node, you need to download the dataset again. However, as long as you stay on the same node, you do not need to re-download the dataset. 
 
 Follow these steps to set up the environment and start a Jupyter notebook on Bridges2:
 
@@ -357,7 +357,7 @@ Next, choose `"/Users/<your_username>/.ssh/config"` as the config file. A dialog
 
 4) You can now drag your notebook files directly into the right-hand pane (your remote home directory), or upload them using `scp` into your folder.
 
-❗️⚠️ The following steps should be executed in the **VSCode integrated terminal**.
+❗️The following steps should be executed in the **VSCode integrated terminal**.
  
 #### **2. Navigate to Your Directory**
 Make sure to use this `/jet/home/<your_username>` as your working directory, since all subsequent operations (up to submission) are based on this path.
@@ -445,7 +445,7 @@ api = kaggle.api  # Already authenticated on import
 
 ### 4️⃣ **Step 4: Get Data**
 
-❗️⚠️ In this homework, you need to download the dataset to the **GPU node’s local storage (`$LOCAL`)** instead of using the shared /ocean directory, in order to avoid I/O bottlenecks. Using the shared filesystem may slow down training drastically and can take hours per epoch.
+❗️In this homework, you need to download the dataset to the **GPU node’s local storage (`$LOCAL`)** instead of using the shared /ocean directory, in order to avoid I/O bottlenecks. Using the shared filesystem may slow down training drastically and can take hours per epoch.
 
 Note that **the local storage on a compute node is temporary and will be cleared** when your node time limit is reached or when you move to a different node. Therefore, **every time you run on a new node, you need to re-run the dataset download step**. However, as long as you stay on the same node, you do NOT need to download the dataset again.
 
@@ -464,5 +464,6 @@ You can run the following line of code to explore the directory structure:
 ```
 
 ---
-#   t r a n s f o r m e r s  
+#   t r a n s f o r m e r s 
+ 
  
