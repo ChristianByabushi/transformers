@@ -71,6 +71,7 @@
   <button class="tab" onclick="switchTab('softmax')">Softmax (forward)</button>
   <button class="tab" onclick="switchTab('attention')">ScaledDotProduct (forward)</button>
   <button class="tab" onclick="switchTab('transformer')">Transformer Flow</button>
+  <button class="tab" onclick="switchTab('greedy')">Greedy Search</button>
 </div>
 <div class="scene" id="scene"></div>
 <script>
@@ -795,6 +796,148 @@ function renderTransformer(scene) {
   scene.appendChild(info);
 }
 
+// ===================== GREEDY SEARCH =====================
+const VOCAB = ['<SOS>','I','swam','fast','across','the','river','<EOS>','<PAD>'];
+const SOS=0, EOS=7;
+let gsState = null;
+
+function gsInit(){
+  gsState = {
+    seq: [SOS], scores: [0], finished: false, step: 0,
+    logit_steps: [
+      [0.1, 2.8, 0.2, 0.1, 0.0, 0.0, 0.0, -1.0, -5.0],
+      [0.0, 0.1, 2.5, 0.3, 0.1, 0.0, 0.0, -1.0, -5.0],
+      [0.0, 0.0, 0.1, 2.2, 0.2, 0.1, 0.0, -1.0, -5.0],
+      [0.0, 0.0, 0.0, 0.1, 2.0, 0.2, 0.1, -1.0, -5.0],
+      [0.0, 0.0, 0.0, 0.0, 0.1, 2.3, 0.1, -1.0, -5.0],
+      [0.0, 0.0, 0.0, 0.0, 0.0, 0.1, 2.6, -1.0, -5.0],
+      [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.1,  2.9, -5.0],
+    ]
+  };
+}
+
+function gsSoftmax(logits){
+  const max=Math.max(...logits);
+  const exps=logits.map(l=>Math.exp(l-max));
+  const sum=exps.reduce((a,b)=>a+b,0);
+  return exps.map(e=>e/sum);
+}
+
+function renderGreedy(scene){
+  if(!gsState) gsInit();
+  const s=gsState;
+
+  const titleRow=el('div','dim-selector');
+  titleRow.appendChild(el('span','','Greedy Decoding — step by step'));
+  scene.appendChild(titleRow);
+
+  // current sequence
+  const seqWrap=el('div','step-block');
+  seqWrap.style.width='100%'; seqWrap.style.maxWidth='600px';
+  seqWrap.appendChild(el('div','step-title','Current sequence x'));
+  const seqRow=el('div','grid-row'); seqRow.style.flexWrap='wrap'; seqRow.style.gap='6px';
+  s.seq.forEach((tok,i)=>{
+    const c=el('div','cell');
+    c.style.width='56px'; c.style.height='36px'; c.style.fontSize='0.62em';
+    c.style.background=tok===EOS?'#7b1a1a':tok===SOS?'#1a4a6b':'#1a6b3a';
+    c.style.border='2px solid #7eb8f7';
+    c.textContent=VOCAB[tok];
+    seqRow.appendChild(c);
+  });
+  seqWrap.appendChild(seqRow);
+  scene.appendChild(seqWrap);
+
+  if(!s.finished && s.step < s.logit_steps.length){
+    const logits=s.logit_steps[s.step];
+    const probs=gsSoftmax(logits);
+    const logProbs=probs.map(p=>Math.log(p));
+    const bestIdx=logits.indexOf(Math.max(...logits));
+
+    const chartWrap=el('div','step-block');
+    chartWrap.style.width='100%'; chartWrap.style.maxWidth='600px';
+    chartWrap.appendChild(el('div','step-title',`score_fn(x) → logits → softmax → argmax = "${VOCAB[bestIdx]}"`));
+    const chart=el('div',''); chart.style.cssText='display:flex;flex-direction:column;gap:4px;width:100%';
+
+    VOCAB.forEach((tok,i)=>{
+      const barRow=el('div',''); barRow.style.cssText='display:flex;align-items:center;gap:8px';
+      const lbl=el('div',''); lbl.style.cssText='width:60px;font-size:0.65em;text-align:right;flex-shrink:0';
+      lbl.style.color=i===bestIdx?'#7eb8f7':'#aaa'; if(i===bestIdx) lbl.style.fontWeight='bold';
+      lbl.textContent=tok;
+      const barBg=el('div',''); barBg.style.cssText='flex:1;background:#1a1a2e;border-radius:3px;height:18px';
+      const bar=el('div','');
+      bar.style.cssText=`height:100%;border-radius:3px;width:${Math.max(0,probs[i]*100)}%;background:${i===bestIdx?'#7eb8f7':'#3a6186'}`;
+      barBg.appendChild(bar);
+      const val=el('div',''); val.style.cssText=`width:110px;font-size:0.6em;color:${i===bestIdx?'#7eb8f7':'#888'};flex-shrink:0`;
+      val.textContent=`p=${probs[i].toFixed(3)} lp=${logProbs[i].toFixed(2)}${i===bestIdx?' ← argmax':''}`;
+      barRow.appendChild(lbl); barRow.appendChild(barBg); barRow.appendChild(val);
+      chart.appendChild(barRow);
+    });
+    chartWrap.appendChild(chart);
+    scene.appendChild(chartWrap);
+
+    const scoreBox=el('div','info-box');
+    const cumScore=s.scores[s.scores.length-1];
+    scoreBox.innerHTML=`<b>score update:</b> scores += log_prob("${VOCAB[bestIdx]}") = <span class="hl">${logProbs[bestIdx].toFixed(3)}</span><br>
+      cumulative score = <span class="hl">${(cumScore+logProbs[bestIdx]).toFixed(3)}</span> &nbsp;|&nbsp; finished = <span class="hl">${bestIdx===EOS}</span>`;
+    scene.appendChild(scoreBox);
+  }
+
+  if(s.finished){
+    const doneBox=el('div','info-box');
+    doneBox.innerHTML=`<b style="color:#4caf50">✓ EOS generated — sequence complete</b><br>
+      ${s.seq.map(t=>VOCAB[t]).join(' → ')}<br>
+      Total score: <span class="hl">${s.scores[s.scores.length-1].toFixed(3)}</span>`;
+    scene.appendChild(doneBox);
+  }
+
+  const ctrl=el('div','btn-row');
+  let gsTimer=null;
+
+  const nextBtn=el('button','btn','Next Step →');
+  nextBtn.onclick=()=>{
+    if(s.finished||s.step>=s.logit_steps.length) return;
+    const logits=s.logit_steps[s.step];
+    const probs=gsSoftmax(logits);
+    const logProbs=probs.map(p=>Math.log(p));
+    const bestIdx=logits.indexOf(Math.max(...logits));
+    s.seq.push(bestIdx);
+    s.scores.push(s.scores[s.scores.length-1]+logProbs[bestIdx]);
+    s.step++;
+    if(bestIdx===EOS) s.finished=true;
+    render();
+  };
+
+  const autoBtn=el('button','btn','▶ Auto');
+  autoBtn.onclick=()=>{
+    gsTimer=setInterval(()=>{
+      if(s.finished||s.step>=s.logit_steps.length){ clearInterval(gsTimer); render(); return; }
+      nextBtn.onclick();
+    },1000);
+  };
+
+  const resetBtn=el('button','btn','Reset');
+  resetBtn.onclick=()=>{ if(gsTimer) clearInterval(gsTimer); gsInit(); render(); };
+
+  ctrl.appendChild(autoBtn); ctrl.appendChild(nextBtn); ctrl.appendChild(resetBtn);
+  scene.appendChild(ctrl);
+
+  const code=el('div','info-box'); code.style.textAlign='left';
+  code.innerHTML=`<b>generate_greedy pseudocode:</b><br>
+<span style="color:#888">scores=zeros(B) | finished=False×B</span><br>
+<b>for</b> t in range(max_len - len(x)):<br>
+&nbsp;&nbsp;<b>if</b> all(finished): <b>break</b><br>
+&nbsp;&nbsp;logits = <span class="hl">score_fn(x)</span> <span style="color:#888">← model.score(), grabs x[:,-1,:]</span><br>
+&nbsp;&nbsp;logits = apply_repeat_penalty(logits, x, penalty)<br>
+&nbsp;&nbsp;logits = logits / temperature<br>
+&nbsp;&nbsp;log_probs = log_softmax(logits)<br>
+&nbsp;&nbsp;next_tokens = <span class="hl">argmax(log_probs, dim=-1)</span> <span style="color:#888">← greedy</span><br>
+&nbsp;&nbsp;token_scores = log_probs[next_tokens]<br>
+&nbsp;&nbsp;scores = where(finished, scores, scores + token_scores)<br>
+&nbsp;&nbsp;x = cat([x, next_tokens.unsqueeze(1)], dim=1)<br>
+&nbsp;&nbsp;finished |= (next_tokens == EOS)`;
+  scene.appendChild(code);
+}
+
 
 function switchTab(tab){
   currentTab=tab; focusedCell=null; attnFocus=null;
@@ -810,7 +953,8 @@ function render(){
   if(currentTab==='linear') renderLinear(scene);
   else if(currentTab==='softmax') renderSoftmax(scene);
   else if(currentTab==='attention') renderAttention(scene);
-  else renderTransformer(scene);
+  else if(currentTab==='transformer') renderTransformer(scene);
+  else renderGreedy(scene);
 }
 render();
 </script>

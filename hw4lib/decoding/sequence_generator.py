@@ -54,6 +54,7 @@ class SequenceGenerator:
             device: str = "cuda" if torch.cuda.is_available() else "cpu"
     ):
         """
+
         Initialize the sequence generator.
         
         Args:
@@ -62,6 +63,7 @@ class SequenceGenerator:
             max_length: Maximum sequence length to generate
             device: Device to run generation on
         """
+
         self.score_fn = score_fn
         self.tokenizer = tokenizer
         self.max_length = max_length
@@ -82,6 +84,7 @@ class SequenceGenerator:
         Returns:
             Logits tensor with repetition penalty applied
         """
+
         if penalty == 1.0:
             return logits
         
@@ -156,16 +159,50 @@ class SequenceGenerator:
              - sequences is of shape (batch_size, sequence_length)
              - scores is of shape (batch_size,)
         """
-        # Add input validation
-        if not torch.is_tensor(x):
-            raise TypeError("Input x must be a torch tensor")
-        if x.dim() != 2:
-            raise ValueError("Input x must be 2-dimensional (batch_size, seq_len)")
-        if self.max_length < x.size(1):
-            raise ValueError("max_length must be >= input sequence length")
         
-        # TODO: Implement greedy search
-        raise NotImplementedError # Remove once implemented
+        batch_size = x.size(0)
+        scores = torch.zeros(batch_size, device=x.device)
+        finished = torch.zeros(batch_size, dtype=torch.bool,device=x.device) 
+
+        for _ in range(self.max_length - x.size(1)):
+            if finished.all():
+                break
+
+            # get logits, and apply repeat penalty, scale by temperature
+            logits = self.score_fn(x)
+            logits = self._apply_repeat_penalty(logits, x, repeat_penalty)
+            logits = logits/temperature
+
+            # logs probs and pick argmax (greedy=highest prob)
+            log_probs = torch.log_softmax(logits, dim=-1)
+            next_tokens = log_probs.argmax(dim=-1)
+            token_scores = log_probs.gather(1,next_tokens.unsqueeze(1)).squeeze(1)
+
+            # only update scores unfinished sequences
+            scores = torch.where(finished, scores, scores+token_scores)
+
+            # append next token
+            x = torch.cat([x, next_tokens.unsqueeze(1)], dim=1) # (B, seq_len+1)
+
+            # mark finished if EOS generated
+            finished = finished | (next_tokens == self.tokenizer.eos_id)
+
+        return x, scores
+
+
+
+
+
+        # # Add input validation
+        # if not torch.is_tensor(x):
+        #     raise TypeError("Input x must be a torch tensor")
+        # if x.dim() != 2:
+        #     raise ValueError("Input x must be 2-dimensional (batch_size, seq_len)")
+        # if self.max_length < x.size(1):
+        #     raise ValueError("max_length must be >= input sequence length")
+        
+        # # TODO: Implement greedy search
+        # raise NotImplementedError # Remove once implemented
 
     def generate_beam(
             self,
