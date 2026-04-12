@@ -62,15 +62,16 @@ class LMDataset(Dataset):
 
         # Set up data paths 
         # TODO: Join root and partition to get the text directory
-        self.text_dir = os.path.join(config['data']['root'],partition)
+        self.text_dir = os.path.join(config['root'],partition)
 
         # TODO: Get all text files in the text directory in sorted order  
         self.text_files = sorted(
             os.path.join(self.text_dir,f) for f in os.listdir(self.text_dir)
         )
 
-        # TODO: Take subset
-        subset_size = config['data'].get('subset', len(self.text_files))
+        # TODO: Take subset 
+        subset_raw = config.get('subset',1.0) 
+        subset_size = int(subset_raw * len(self.text_files)) if isinstance(subset_raw, float) else int(subset_raw)
         self.text_files = self.text_files[:subset_size]
 
         # Initialize lists to store transcripts
