@@ -90,7 +90,7 @@ class ASRDataset(Dataset):
         self.fbank_dir   = os.path.join(config['root'], partition, 'fbank')
         
         # TODO: Get all feature files in the feature directory in sorted order  
-        self.fbank_files = sorted(os.path.join(self.fbank_dir, f) for f in os.listdir(self.fbank_dir))
+        self.fbank_files = sorted(os.listdir(self.fbank_dir))
 
         
         # TODO: Take subset 
@@ -109,7 +109,7 @@ class ASRDataset(Dataset):
             self.text_dir   = os.path.join(config['root'], partition, 'text')
 
             # TODO: Get all text files in the text directory in sorted order  
-            self.text_files = sorted(os.path.join(self.text_dir, f) for f in os.listdir(self.text_dir))
+            self.text_files = sorted(os.listdir(self.text_dir))
             
             # TODO: Take subset
             self.text_files = self.text_files[:subset_size]
@@ -144,7 +144,7 @@ class ASRDataset(Dataset):
         for i in tqdm(range(self.length)):
             # TODO: Load features
             # Features are of shape (num_feats, time)
-            feat = np.load(self.fbank_files[i], allow_pickle=True)   
+            feat = np.load(os.path.join(self.fbank_dir, self.fbank_files[i]), allow_pickle=True)   
 
             # TODO: Truncate features to num_feats set by you in the config
             feat = feat[:config['num_feats'], :]  
@@ -172,7 +172,7 @@ class ASRDataset(Dataset):
             if self.partition != "test-clean":
                 # TODO: Load the transcript
                 # Important Note: This is a very important line of code and you should check whether your transcript is correct after loading (and very dependent in evaluation)
-                transcript = ''.join(np.load(self.text_files[i], allow_pickle=True).tolist())
+                transcript = ''.join(np.load(os.path.join(self.text_dir, self.text_files[i]), allow_pickle=True).tolist())
 
                 # TODO: Track character count (before tokenization)
                 self.total_chars += len(transcript)
