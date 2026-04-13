@@ -72,6 +72,7 @@ class StackedBLSTMEmbedding(nn.Module):
             "padding": 0,
             "dilation": 1
         }
+        
         self.pool2_params = {
             "kernel_size": self.stride2,
             "stride": self.stride2,
