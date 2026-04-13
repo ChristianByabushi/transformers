@@ -233,8 +233,63 @@ class SequenceGenerator:
         if self.max_length < x.size(1):
             raise ValueError("max_length must be >= input sequence length")
         
-        # TODO: Implement beam search
-        raise NotImplementedError # Remove once implemented
+        batch_size = x.size(0)
+        vocab_size = self.score_fn(x).size(-1)
+
+        scores   = torch.zeros(batch_size, beam_width, device=x.device)
+        finished = torch.zeros(batch_size, beam_width, dtype=torch.bool, device=x.device)
+
+        # step 0: seed beams with top-beam_width tokens
+        logits    = self.score_fn(x)
+        logits    = self._apply_repeat_penalty(logits, x, repeat_penalty)
+        logits    = logits / temperature
+        log_probs = torch.log_softmax(logits, dim=-1)
+
+        top_scores, top_tokens = log_probs.topk(beam_width, dim=-1)   # (B, beam_width)
+        scores = top_scores
+
+        x = x.unsqueeze(1).expand(-1, beam_width, -1).clone()         # (B, beam_width, seq_len)
+        x = torch.cat([x, top_tokens.unsqueeze(-1)], dim=-1)          # (B, beam_width, seq_len+1)
+
+        finished = finished | (top_tokens == self.tokenizer.eos_id)
+
+        for _ in range(1, self.max_length - x.size(2) + 1):
+            if finished.all():
+                break
+
+            next_token_scores = []
+            for b in range(beam_width):
+                beam_x   = x[:, b, :]
+                logits_b = self.score_fn(beam_x)
+                logits_b = self._apply_repeat_penalty(logits_b, beam_x, repeat_penalty)
+                next_token_scores.append(logits_b)
+
+            next_token_scores = torch.stack(next_token_scores, dim=1)          # (B, beam_width, vocab)
+            next_token_scores = next_token_scores / temperature
+            next_token_scores = torch.log_softmax(next_token_scores, dim=-1)
+
+            cum_scores      = scores.unsqueeze(-1) + next_token_scores         # (B, beam_width, vocab)
+            cum_scores_flat = cum_scores.view(batch_size, -1)                  # (B, beam_width*vocab)
+
+            top_scores, top_indices = cum_scores_flat.topk(beam_width, dim=-1) # (B, beam_width)
+            beam_indices = top_indices // vocab_size
+            next_tokens  = top_indices % vocab_size
+
+            finished = torch.gather(finished, 1, beam_indices)
+            finished = finished | (next_tokens == self.tokenizer.eos_id)
+
+            beam_idx_exp = beam_indices.unsqueeze(-1).expand(-1, -1, x.size(-1))
+            x = torch.gather(x, 1, beam_idx_exp)
+            x = torch.cat([x, next_tokens.unsqueeze(-1)], dim=-1)
+
+            scores = torch.where(finished, scores, top_scores)
+
+        # sort beams descending by score
+        sorted_scores, sort_idx = scores.sort(dim=-1, descending=True)
+        sort_idx_exp = sort_idx.unsqueeze(-1).expand(-1, -1, x.size(-1))
+        x = torch.gather(x, 1, sort_idx_exp)
+
+        return x, sorted_scores
 
     def generate_sample(
             self,
