@@ -172,7 +172,7 @@ class ASRDataset(Dataset):
             if self.partition != "test-clean":
                 # TODO: Load the transcript
                 # Important Note: This is a very important line of code and you should check whether your transcript is correct after loading (and very dependent in evaluation)
-                transcript = np.load(self.text_files[i], allow_pickle=True).item()
+                transcript = ''.join(np.load(self.text_files[i], allow_pickle=True).tolist())
 
                 # TODO: Track character count (before tokenization)
                 self.total_chars += len(transcript)
