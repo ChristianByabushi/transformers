@@ -1,6 +1,6 @@
 # Transformers/NLP-DEEP LEARNING
 
-## HW4P1: Autoregressive Language Modeling with a Causal Transformer Decoder
+## Autoregressive Language Modeling with a Causal Transformer Decoder
 
 ### Model
 Decoder-only Transformer (GPT-style, Pre-LN). Single stack of `SelfAttentionDecoderLayer` blocks, each containing masked multi-head self-attention and a position-wise feedforward network. Causal masking prevents attending to future tokens. Optional weight tying between the token embedding and the final linear projection.
