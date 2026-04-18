@@ -23,7 +23,7 @@ None, language modeling uses raw tokenized text sequences.
 
 ---
 
-## HW4P2: Automatic Speech Recognition with an Encoder-Decoder Transformer
+## Automatic Speech Recognition with an Encoder-Decoder Transformer
 
 ### Model
 Pre-LN Encoder-Decoder Transformer for ASR. The encoder processes 80-dimensional filterbank features through a `SpeechEmbedding` layer (CNN/LSTM-based downsampling) followed by `SelfAttentionEncoderLayer` blocks. The decoder uses `CrossAttentionDecoderLayer` blocks with masked self-attention and cross-attention to the encoder output. A CTC auxiliary head on the encoder output provides additional training signal. Optional weight tying between target embedding and final linear layer.
