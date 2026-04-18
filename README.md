@@ -13,7 +13,7 @@ Decoder-only Transformer (GPT-style, Pre-LN). Single stack of `SelfAttentionDeco
 - Mixed precision (fp16) via GradScaler
 
 ### Augmentations
-None — language modeling uses raw tokenized text sequences.
+None, language modeling uses raw tokenized text sequences.
 
 ### Notebook Execution
 1. Ensure the working directory is the handout root (`IDL-HW4/`)
